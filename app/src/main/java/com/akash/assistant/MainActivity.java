@@ -58,6 +58,7 @@ public class MainActivity extends Activity implements RecognitionListener {
     boolean chatMode = true;
     boolean ttsReady = false;
     ArrayList<String[]> history = new ArrayList<>();
+    String lastErr = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -369,8 +370,9 @@ public class MainActivity extends Activity implements RecognitionListener {
                         if (code != 404 && code != 503 && code != 500 && code != 429) break;
                     }
                 }
-            } catch (Exception e) {
+            }     catch (Exception e) {
                 errCode = -1;
+                lastErr = e.toString();
             }
 
             final String finalReply = reply;
@@ -389,7 +391,7 @@ public class MainActivity extends Activity implements RecognitionListener {
                     speak("आज की free limit पूरी हो गई, थोड़ी देर बाद try करो",
                             "Free limit reached, try again later");
                 } else if (finalErr == -1) {
-                    speak("इंटरनेट चेक करो", "Please check your internet");
+                    status.setText("Error: " + lastErr);
                 } else {
                     speak("जवाब नहीं मिला (error " + finalErr + ")", "No answer (error " + finalErr + ")");
                 }
