@@ -41,7 +41,7 @@ import org.json.JSONObject;
 
 public class MainActivity extends Activity implements RecognitionListener {
 
-    static final String[] MODELS = {"gemini-3.8-flash", "gemini-3.6-flash"};
+    static final String[] MODELS = {"gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"};
     static final String SYSTEM_PROMPT =
             "You are a friendly voice assistant on an Android phone. "
             + "Reply in the same language the user spoke: Hindi in Devanagari script, or English. "
@@ -366,7 +366,7 @@ public class MainActivity extends Activity implements RecognitionListener {
                         break;
                     } else {
                         errCode = code;
-                        if (code != 404) break;
+                        if (code != 404 && code != 503 && code != 500 && code != 429) break;
                     }
                 }
             } catch (Exception e) {
