@@ -4,7 +4,6 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.database.Cursor;
@@ -41,7 +40,7 @@ import org.json.JSONObject;
 
 public class MainActivity extends Activity implements RecognitionListener {
 
-    static final String[] MODELS = {"gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"};
+    static final String[] MODELS = {"gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"};
     static final String SYSTEM_PROMPT =
             "You are a friendly voice assistant on an Android phone. "
             + "Reply in the same language the user spoke: Hindi in Devanagari script, or English. "
@@ -317,6 +316,8 @@ public class MainActivity extends Activity implements RecognitionListener {
         new Thread(() -> {
             String reply = null;
             int errCode = 0;
+            lastErr = "";
+            byte[] payload = null;
             try {
                 JSONObject body = new JSONObject();
                 body.put("system_instruction", new JSONObject().put("parts",
@@ -329,50 +330,58 @@ public class MainActivity extends Activity implements RecognitionListener {
                 contents.put(new JSONObject().put("role", "user").put("parts",
                         new JSONArray().put(new JSONObject().put("text", userText))));
                 body.put("contents", contents);
-                byte[] payload = body.toString().getBytes("UTF-8");
-
-                for (String model : MODELS) {
-                    URL url = new URL("https://generativelanguage.googleapis.com/v1beta/models/"
-                            + model + ":generateContent");
-                    HttpURLConnection c = (HttpURLConnection) url.openConnection();
-                    c.setRequestMethod("POST");
-                    c.setRequestProperty("Content-Type", "application/json");
-                    c.setRequestProperty("x-goog-api-key", key);
-                    c.setConnectTimeout(15000);
-                    c.setReadTimeout(40000);
-                    c.setDoOutput(true);
-                    OutputStream os = c.getOutputStream();
-                    os.write(payload);
-                    os.close();
-
-                    int code = c.getResponseCode();
-                    InputStream is = code < 400 ? c.getInputStream() : c.getErrorStream();
-                    StringBuilder sb = new StringBuilder();
-                    if (is != null) {
-                        BufferedReader br = new BufferedReader(new InputStreamReader(is, "UTF-8"));
-                        String line;
-                        while ((line = br.readLine()) != null) sb.append(line);
-                        br.close();
-                    }
-                    if (code == 200) {
-                        JSONObject r = new JSONObject(sb.toString());
-                        JSONArray parts = r.getJSONArray("candidates").getJSONObject(0)
-                                .getJSONObject("content").getJSONArray("parts");
-                        StringBuilder out = new StringBuilder();
-                        for (int i = 0; i < parts.length(); i++) {
-                            out.append(parts.getJSONObject(i).optString("text", ""));
-                        }
-                        reply = out.toString().replace("*", "").replace("#", "").trim();
-                        errCode = 0;
-                        break;
-                    } else {
-                        errCode = code;
-                        if (code != 404 && code != 503 && code != 500 && code != 429) break;
-                    }
-                }
-            }     catch (Exception e) {
+                payload = body.toString().getBytes("UTF-8");
+            } catch (Exception e) {
                 errCode = -1;
                 lastErr = e.toString();
+            }
+
+            if (payload != null) {
+                for (String model : MODELS) {
+                    try {
+                        URL url = new URL("https://generativelanguage.googleapis.com/v1beta/models/"
+                                + model + ":generateContent");
+                        HttpURLConnection c = (HttpURLConnection) url.openConnection();
+                        c.setRequestMethod("POST");
+                        c.setRequestProperty("Content-Type", "application/json");
+                        c.setRequestProperty("x-goog-api-key", key);
+                        c.setConnectTimeout(15000);
+                        c.setReadTimeout(25000);
+                        c.setDoOutput(true);
+                        OutputStream os = c.getOutputStream();
+                        os.write(payload);
+                        os.close();
+
+                        int code = c.getResponseCode();
+                        InputStream is = code < 400 ? c.getInputStream() : c.getErrorStream();
+                        StringBuilder sb = new StringBuilder();
+                        if (is != null) {
+                            BufferedReader br = new BufferedReader(new InputStreamReader(is, "UTF-8"));
+                            String line;
+                            while ((line = br.readLine()) != null) sb.append(line);
+                            br.close();
+                        }
+                        if (code == 200) {
+                            JSONObject r = new JSONObject(sb.toString());
+                            JSONArray parts = r.getJSONArray("candidates").getJSONObject(0)
+                                    .getJSONObject("content").getJSONArray("parts");
+                            StringBuilder out = new StringBuilder();
+                            for (int i = 0; i < parts.length(); i++) {
+                                out.append(parts.getJSONObject(i).optString("text", ""));
+                            }
+                            reply = out.toString().replace("*", "").replace("#", "").trim();
+                            errCode = 0;
+                            break;
+                        } else {
+                            errCode = code;
+                            lastErr = model + " -> HTTP " + code;
+                            if (code == 400 || code == 403) break;
+                        }
+                    } catch (Exception e) {
+                        errCode = -1;
+                        lastErr = model + " -> " + e.toString();
+                    }
+                }
             }
 
             final String finalReply = reply;
@@ -390,10 +399,8 @@ public class MainActivity extends Activity implements RecognitionListener {
                 } else if (finalErr == 429) {
                     speak("आज की free limit पूरी हो गई, थोड़ी देर बाद try करो",
                             "Free limit reached, try again later");
-                } else if (finalErr == -1) {
-                    status.setText("Error: " + lastErr);
                 } else {
-                    speak("जवाब नहीं मिला (error " + finalErr + ")", "No answer (error " + finalErr + ")");
+                    status.setText("Error: " + lastErr);
                 }
             });
         }).start();
@@ -510,7 +517,7 @@ public class MainActivity extends Activity implements RecognitionListener {
                 Intent launch = pm.getLaunchIntentForPackage(ri.activityInfo.packageName);
                 if (launch != null) {
                     speak("खोल रहा हूँ " + label, "Opening " + label);
-         startActivity(launch);
+                    startActivity(launch);
                     return;
                 }
             }
