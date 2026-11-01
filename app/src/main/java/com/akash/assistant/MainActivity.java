@@ -12,6 +12,8 @@ import android.media.AudioManager;
 import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.AlarmClock;
 import android.provider.ContactsContract;
 import android.speech.RecognitionListener;
@@ -48,13 +50,14 @@ public class MainActivity extends Activity implements RecognitionListener {
             + "Do not use markdown, lists, asterisks or emojis.";
 
     TextView status;
+    Button talk;
     Button langBtn;
-    Button chatBtn;
     Button keyBtn;
     SpeechRecognizer recognizer;
     TextToSpeech tts;
+    Handler h = new Handler(Looper.getMainLooper());
     boolean hindi = true;
-    boolean chatMode = true;
+    boolean active = false;
     boolean ttsReady = false;
     ArrayList<String[]> history = new ArrayList<>();
     String lastErr = "";
@@ -72,16 +75,9 @@ public class MainActivity extends Activity implements RecognitionListener {
         status.setTextSize(20);
         status.setGravity(Gravity.CENTER);
 
-        Button talk = new Button(this);
-        talk.setText("BOLO");
+        talk = new Button(this);
         talk.setTextSize(26);
-        talk.setOnClickListener(v -> startListening());
-
-        chatBtn = new Button(this);
-        chatBtn.setOnClickListener(v -> {
-            chatMode = !chatMode;
-            updateLang();
-        });
+        talk.setOnClickListener(v -> setActive(!active));
 
         langBtn = new Button(this);
         langBtn.setOnClickListener(v -> {
@@ -94,7 +90,6 @@ public class MainActivity extends Activity implements RecognitionListener {
 
         root.addView(status);
         root.addView(talk);
-        root.addView(chatBtn);
         root.addView(langBtn);
         root.addView(keyBtn);
         setContentView(root);
@@ -103,13 +98,8 @@ public class MainActivity extends Activity implements RecognitionListener {
         tts = new TextToSpeech(this, st -> ttsReady = (st == TextToSpeech.SUCCESS));
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
             @Override public void onStart(String utteranceId) { }
-            @Override public void onError(String utteranceId) { }
-            @Override
-            public void onDone(String utteranceId) {
-                if ("gemini".equals(utteranceId) && chatMode) {
-                    runOnUiThread(() -> startListening());
-                }
-            }
+            @Override public void onError(String utteranceId) { restart(800); }
+            @Override public void onDone(String utteranceId) { restart(800); }
         });
 
         requestPermissions(new String[]{
@@ -119,17 +109,39 @@ public class MainActivity extends Activity implements RecognitionListener {
     }
 
     void updateLang() {
+        talk.setText(active ? (hindi ? "बंद करो" : "STOP") : "BOLO");
         if (hindi) {
             langBtn.setText("भाषा: हिंदी (बदलो)");
-            chatBtn.setText(chatMode ? "बातचीत मोड: चालू" : "बातचीत मोड: बंद");
             keyBtn.setText("KEY डालो");
-            status.setText("BOLO dabao aur kuch bhi pucho ya bolo:\nटॉर्च चालू करो\nव्हाट्सऐप खोलो\nभारत की राजधानी क्या है");
+            status.setText("BOLO ek baar dabao, phir bolte raho. Band karne ke liye dobara dabao.\n\nटॉर्च चालू करो\nव्हाट्सऐप ओपन करो\nभारत की राजधानी क्या है");
         } else {
             langBtn.setText("Language: English (change)");
-            chatBtn.setText(chatMode ? "Chat mode: ON" : "Chat mode: OFF");
             keyBtn.setText("Set KEY");
-            status.setText("Press BOLO and ask anything or say:\ntorch on\nopen WhatsApp\ntell me a joke");
+            status.setText("Press BOLO once, then keep talking. Press again to stop.\n\ntorch on\nopen WhatsApp\ntell me a joke");
         }
+    }
+
+    void setActive(boolean on) {
+        active = on;
+        h.removeCallbacksAndMessages(null);
+        if (on) {
+            talk.setText(hindi ? "बंद करो" : "STOP");
+            if (tts != null) tts.stop();
+            startListening();
+        } else {
+            talk.setText("BOLO");
+            if (recognizer != null) recognizer.cancel();
+            if (tts != null) tts.stop();
+            status.setText(hindi ? "बंद कर दिया. फिर शुरू करने के लिए BOLO दबाओ"
+                    : "Stopped. Press BOLO to start again");
+        }
+    }
+
+    void restart(long delay) {
+        if (!active) return;
+        h.postDelayed(() -> {
+            if (active) startListening();
+        }, delay);
     }
 
     void askKey() {
@@ -158,6 +170,8 @@ public class MainActivity extends Activity implements RecognitionListener {
         if (tts != null && ttsReady) {
             tts.setLanguage(hindi ? new Locale("hi", "IN") : new Locale("en", "IN"));
             tts.speak(msg, TextToSpeech.QUEUE_FLUSH, null, id);
+        } else {
+            restart(1500);
         }
     }
 
@@ -169,11 +183,14 @@ public class MainActivity extends Activity implements RecognitionListener {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 1);
+            setActive(false);
             return;
         }
         if (recognizer == null) {
             recognizer = SpeechRecognizer.createSpeechRecognizer(this);
             recognizer.setRecognitionListener(this);
+        } else {
+            recognizer.cancel();
         }
         Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -218,7 +235,7 @@ public class MainActivity extends Activity implements RecognitionListener {
 
     void handle(String raw) {
         int words = raw.trim().split("\\s+").length;
-        if (words <= 7 && handleLocal(raw)) return;
+        if (words <= 8 && handleLocal(raw)) return;
 
         String key = getKey();
         if (key.isEmpty()) {
@@ -231,8 +248,8 @@ public class MainActivity extends Activity implements RecognitionListener {
     boolean handleLocal(String raw) {
         String t = raw.toLowerCase(Locale.ROOT).trim();
 
-        if (has(t, "torch", "flashlight", "flash light", "टॉर्च", "टार्च", "फ्लैश")) {
-            boolean off = has(t, "off", "band", "बंद", "बन्द");
+        if (has(t, "torch", "flashlight", "flash light", "टॉर्च", "टार्च", "फ्लैश", "फ्लेश")) {
+            boolean off = has(t, "off", "ऑफ", "band", "बंद", "बन्द");
             torch(!off);
             return true;
         }
@@ -287,9 +304,10 @@ public class MainActivity extends Activity implements RecognitionListener {
             return true;
         }
 
-        if (has(t, "open", "खोल", "kholo", "khol")) {
-            String name = stripWords(t, "open", "kholo", "khol", "खोलो", "खोल", "करो",
-                    "कर", "दो", "दीजिए", "को", "ऐप", "app", "please", "प्लीज");
+        if (has(t, "open", "ओपन", "खोल", "kholo", "khol", "start", "स्टार्ट", "चलाओ")) {
+            String name = stripWords(t, "open", "ओपन", "kholo", "khol", "खोलो", "खोल",
+                    "खोलिए", "खोलिये", "करो", "कर", "दो", "दीजिए", "को", "ऐप", "एप",
+                    "app", "please", "प्लीज", "start", "स्टार्ट", "चलाओ", "जी", "ज़रा");
             openApp(aliasName(name));
             return true;
         }
@@ -323,9 +341,9 @@ public class MainActivity extends Activity implements RecognitionListener {
                 body.put("system_instruction", new JSONObject().put("parts",
                         new JSONArray().put(new JSONObject().put("text", SYSTEM_PROMPT))));
                 JSONArray contents = new JSONArray();
-                for (String[] h : history) {
-                    contents.put(new JSONObject().put("role", h[0]).put("parts",
-                            new JSONArray().put(new JSONObject().put("text", h[1]))));
+                for (String[] hh : history) {
+                    contents.put(new JSONObject().put("role", hh[0]).put("parts",
+                            new JSONArray().put(new JSONObject().put("text", hh[1]))));
                 }
                 contents.put(new JSONObject().put("role", "user").put("parts",
                         new JSONArray().put(new JSONObject().put("text", userText))));
@@ -345,8 +363,8 @@ public class MainActivity extends Activity implements RecognitionListener {
                         c.setRequestMethod("POST");
                         c.setRequestProperty("Content-Type", "application/json");
                         c.setRequestProperty("x-goog-api-key", key);
-                        c.setConnectTimeout(15000);
-                        c.setReadTimeout(25000);
+                        c.setConnectTimeout(10000);
+                        c.setReadTimeout(20000);
                         c.setDoOutput(true);
                         OutputStream os = c.getOutputStream();
                         os.write(payload);
@@ -387,6 +405,7 @@ public class MainActivity extends Activity implements RecognitionListener {
             final String finalReply = reply;
             final int finalErr = errCode;
             runOnUiThread(() -> {
+                if (!active) return;
                 if (finalReply != null && !finalReply.isEmpty()) {
                     history.add(new String[]{"user", userText});
                     history.add(new String[]{"model", finalReply});
@@ -401,6 +420,7 @@ public class MainActivity extends Activity implements RecognitionListener {
                             "Free limit reached, try again later");
                 } else {
                     status.setText("Error: " + lastErr);
+                    restart(2500);
                 }
             });
         }).start();
@@ -422,30 +442,30 @@ public class MainActivity extends Activity implements RecognitionListener {
             speak("समय बोलो, जैसे अलार्म 7 30", "Say a time, like alarm 7 30");
             return;
         }
-        int h;
-        int m;
+        int hr;
+        int mi;
         try {
             if (digits.length() <= 2) {
-                h = Integer.parseInt(digits);
-                m = 0;
+                hr = Integer.parseInt(digits);
+                mi = 0;
             } else {
-                h = Integer.parseInt(digits.substring(0, digits.length() - 2));
-                m = Integer.parseInt(digits.substring(digits.length() - 2));
+                hr = Integer.parseInt(digits.substring(0, digits.length() - 2));
+                mi = Integer.parseInt(digits.substring(digits.length() - 2));
             }
         } catch (Exception e) {
             speak("समय समझ नहीं आया", "Could not understand the time");
             return;
         }
-        if (h > 23 || m > 59) {
+        if (hr > 23 || mi > 59) {
             speak("समय सही नहीं है", "That time is not valid");
             return;
         }
         Intent a = new Intent(AlarmClock.ACTION_SET_ALARM);
-        a.putExtra(AlarmClock.EXTRA_HOUR, h);
-        a.putExtra(AlarmClock.EXTRA_MINUTES, m);
+        a.putExtra(AlarmClock.EXTRA_HOUR, hr);
+        a.putExtra(AlarmClock.EXTRA_MINUTES, mi);
         a.putExtra(AlarmClock.EXTRA_SKIP_UI, true);
         startActivity(a);
-        speak("अलार्म लगा दिया " + h + " बजकर " + m + " मिनट", "Alarm set for " + h + ":" + m);
+        speak("अलार्म लगा दिया " + hr + " बजकर " + mi + " मिनट", "Alarm set for " + hr + ":" + mi);
     }
 
     void dial(String number, String label) {
@@ -485,7 +505,7 @@ public class MainActivity extends Activity implements RecognitionListener {
     }
 
     String aliasName(String n) {
-        if (has(n, "व्हाट्सएप", "व्हाट्सऐप", "वाट्सएप", "व्हाट्स ऐप", "व्हाट्स एप")) return "whatsapp";
+        if (has(n, "व्हाट्सएप", "व्हाट्सऐप", "वाट्सएप", "वाट्सऐप", "व्हाट्स ऐप", "व्हाट्स एप")) return "whatsapp";
         if (has(n, "यूट्यूब", "यू ट्यूब", "यूटयूब")) return "youtube";
         if (has(n, "कैमरा")) return "camera";
         if (has(n, "गैलरी")) return "gallery";
@@ -527,17 +547,31 @@ public class MainActivity extends Activity implements RecognitionListener {
 
     @Override
     public void onResults(Bundle results) {
+        if (!active) return;
         ArrayList<String> list =
                 results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
         if (list != null && !list.isEmpty()) {
             handle(list.get(0));
+        } else {
+            restart(300);
         }
     }
 
     @Override
     public void onError(int error) {
-        status.setText(hindi ? "कुछ सुनाई नहीं दिया, BOLO फिर से दबाओ (error " + error + ")"
-                : "Did not catch that, press BOLO again (error " + error + ")");
+        if (!active) return;
+        if (error == SpeechRecognizer.ERROR_NO_MATCH
+                || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+            restart(300);
+        } else if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+                || error == SpeechRecognizer.ERROR_CLIENT) {
+            if (recognizer != null) recognizer.cancel();
+            restart(1000);
+        } else {
+            setActive(false);
+            status.setText(hindi ? "मिक या इंटरनेट में दिक्कत (error " + error + ")"
+                    : "Mic or internet problem (error " + error + ")");
+        }
     }
 
     @Override public void onReadyForSpeech(Bundle params) { }
@@ -549,8 +583,20 @@ public class MainActivity extends Activity implements RecognitionListener {
     @Override public void onEvent(int eventType, Bundle params) { }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        if (active) {
+            active = false;
+            h.removeCallbacksAndMessages(null);
+            if (recognizer != null) recognizer.cancel();
+            talk.setText("BOLO");
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
+        h.removeCallbacksAndMessages(null);
         if (recognizer != null) recognizer.destroy();
         if (tts != null) tts.shutdown();
     }
